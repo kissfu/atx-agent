@@ -1,31 +1,13 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
-	"crypto/rand"
-	"encoding/hex"
-	"fmt"
-	"image"
-	"io"
-	"io/ioutil"
 	"log"
-	"net"
-	"net/http"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/codeskyblue/goreq"
-	shellquote "github.com/kballard/go-shellquote"
-	"github.com/openatx/androidutils"
 	"github.com/pkg/errors"
-	"github.com/prometheus/procfs"
-	"github.com/shogo82148/androidbinary/apk"
 )
 
 type PerformanceInfo struct {
