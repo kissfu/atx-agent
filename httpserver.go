@@ -114,6 +114,15 @@ func (server *Server) initHTTPServer() {
 		renderJSON(w, resp)
 	})
 
+	m.HandleFunc("/proc/performance", func(w http.ResponseWriter, r *http.Request) {
+		info, err := readPerformanceInfo()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		renderJSON(w, info)
+	})
+
 	m.HandleFunc("/proc/list", func(w http.ResponseWriter, r *http.Request) {
 		ps, err := listAllProcs()
 		if err != nil {
