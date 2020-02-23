@@ -114,15 +114,6 @@ func (server *Server) initHTTPServer() {
 		renderJSON(w, resp)
 	})
 
-	m.HandleFunc("/proc/performance", func(w http.ResponseWriter, r *http.Request) {
-		info, err := readPerformanceInfo()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		renderJSON(w, info)
-	})
-
 	m.HandleFunc("/proc/list", func(w http.ResponseWriter, r *http.Request) {
 		ps, err := listAllProcs()
 		if err != nil {
@@ -1145,6 +1136,20 @@ func (server *Server) initHTTPServer() {
 			return
 		}
 		renderHTML(w, "terminal.html")
+	})
+
+	m.HandleFunc("/performance", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Upgrade") == "websocket" {
+			handlePerformanceWebsocket(w, r)
+			return
+		}
+		renderHTML(w, "performance.html")
+		//info, err := readPerformanceInfo()
+		//if err != nil {
+		//	http.Error(w, err.Error(), http.StatusInternalServerError)
+		//	return
+		//}
+		//renderJSON(w, info)
 	})
 
 	screenshotIndex := -1

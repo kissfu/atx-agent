@@ -519,13 +519,17 @@ func (c *CPUStat) Update() error {
 	if err != nil {
 		return err
 	}
-	proc, err := fs.NewProc(c.Pid)
-	if err != nil {
-		return err
-	}
-	stat, err := proc.NewStat()
-	if err != nil {
-		return errors.Wrap(err, "read /proc/<pid>/stat")
+	if c.Pid != 0 {
+		proc, err := fs.NewProc(c.Pid)
+		if err != nil {
+			return err
+		}
+		stat, err := proc.NewStat()
+		if err != nil {
+			return errors.Wrap(err, "read /proc/<pid>/stat")
+		}
+		c.ProcSystem = stat.STime
+		c.ProcUser = stat.UTime
 	}
 
 	// retrive /proc/stst
@@ -550,8 +554,8 @@ func (c *CPUStat) Update() error {
 		total += v
 	}
 
-	c.ProcSystem = stat.STime
-	c.ProcUser = stat.UTime
+	//c.ProcSystem = stat.STime
+	//c.ProcUser = stat.UTime
 	c.SystemTotal = total
 	c.SystemIdle = idle
 	c.UpdateTime = time.Now()
