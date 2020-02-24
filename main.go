@@ -683,7 +683,7 @@ func main() {
 		}
 	}()
 
-	service.Start("minitouch")
+	//service.Start("minitouch")
 
 	// run server forever
 	if err := server.Serve(listener); err != nil {
