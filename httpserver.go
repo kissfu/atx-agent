@@ -7,7 +7,6 @@ import (
 	"image/jpeg"
 	"io"
 	"io/ioutil"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -23,7 +22,6 @@ import (
 
 	"github.com/openatx/atx-agent/jsonrpc"
 
-	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 	"github.com/mholt/archiver"
@@ -614,7 +612,10 @@ func (server *Server) initHTTPServer() {
 		if killed {
 			service.Start("minicap")
 		}
+
+		// minicapHub.broadcast <- []byte("rotation " + strconv.Itoa(deviceRotation))
 		updateMinicapRotation(deviceRotation)
+		rotationPublisher.Submit(deviceRotation)
 
 		// APK Service will send rotation to atx-agent when rotation changes
 		runShellTimeout(5*time.Second, "am", "startservice", "--user", "0", "-n", "com.github.uiautomator/.Service")
@@ -962,82 +963,9 @@ func (server *Server) initHTTPServer() {
 		}
 	}).Methods("PUT")
 
-	m.HandleFunc("/minicap", singleFightNewerWebsocket(func(w http.ResponseWriter, r *http.Request, ws *websocket.Conn) {
-		defer ws.Close()
-
-		const wsWriteWait = 10 * time.Second
-		wsWrite := func(messageType int, data []byte) error {
-			ws.SetWriteDeadline(time.Now().Add(wsWriteWait))
-			return ws.WriteMessage(messageType, data)
-		}
-		wsWrite(websocket.TextMessage, []byte("restart @minicap service"))
-		if err := service.Restart("minicap"); err != nil && err != cmdctrl.ErrAlreadyRunning {
-			wsWrite(websocket.TextMessage, []byte("@minicap service start failed: "+err.Error()))
-			return
-		}
-
-		wsWrite(websocket.TextMessage, []byte("dial unix:@minicap"))
-		log.Printf("minicap connection: %v", r.RemoteAddr)
-		dataC := make(chan []byte, 10)
-		quitC := make(chan bool, 2)
-
-		go func() {
-			defer close(dataC)
-			retries := 0
-			for {
-				if retries > 10 {
-					log.Println("unix @minicap connect failed")
-					dataC <- []byte("@minicap listen timeout, possibly minicap not installed")
-					break
-				}
-				conn, err := net.Dial("unix", "@minicap")
-				if err != nil {
-					retries++
-					log.Printf("dial @minicap err: %v, wait 0.5s", err)
-					select {
-					case <-quitC:
-						return
-					case <-time.After(500 * time.Millisecond):
-					}
-					continue
-				}
-				dataC <- []byte("rotation " + strconv.Itoa(deviceRotation))
-				retries = 0 // connected, reset retries
-				if er := translateMinicap(conn, dataC, quitC); er == nil {
-					conn.Close()
-					log.Println("transfer closed")
-					break
-				} else {
-					conn.Close()
-					log.Println("minicap read error, try to read again")
-				}
-			}
-		}()
-		go func() {
-			for {
-				if _, _, err := ws.ReadMessage(); err != nil {
-					quitC <- true
-					break
-				}
-			}
-		}()
-		for data := range dataC {
-			if string(data[:2]) == "\xff\xd8" { // jpeg data
-				if err := wsWrite(websocket.BinaryMessage, data); err != nil {
-					break
-				}
-				if err := wsWrite(websocket.TextMessage, []byte("data size: "+strconv.Itoa(len(data)))); err != nil {
-					break
-				}
-			} else {
-				if err := wsWrite(websocket.TextMessage, data); err != nil {
-					break
-				}
-			}
-		}
-		quitC <- true
-		log.Println("stream finished")
-	})).Methods("GET")
+	minicapHandler := broadcastWebsocket()
+	m.HandleFunc("/minicap/broadcast", minicapHandler).Methods("GET")
+	m.HandleFunc("/minicap", minicapHandler).Methods("GET")
 
 	// TODO(ssx): perfer to delete
 	// FIXME(ssx): screenrecord is not good enough, need to change later
@@ -1241,8 +1169,8 @@ func (server *Server) initHTTPServer() {
 	var handler = cors.New(cors.Options{
 		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE"},
 	}).Handler(m)
-	logHandler := handlers.LoggingHandler(os.Stdout, handler)
-	server.httpServer = &http.Server{Handler: logHandler} // url(/stop) need it.
+	// logHandler := handlers.LoggingHandler(os.Stdout, handler)
+	server.httpServer = &http.Server{Handler: handler} // url(/stop) need it.
 }
 
 func (s *Server) Serve(lis net.Listener) error {

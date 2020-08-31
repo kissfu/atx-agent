@@ -27,12 +27,13 @@ import (
 	"time"
 
 	"github.com/alecthomas/kingpin"
+	"github.com/dustin/go-broadcast"
 	"github.com/gorilla/websocket"
 	"github.com/openatx/androidutils"
 	"github.com/openatx/atx-agent/cmdctrl"
+	"github.com/openatx/atx-agent/logger"
 	"github.com/openatx/atx-agent/subcmd"
 	"github.com/pkg/errors"
-	"github.com/qiniu/log"
 	"github.com/sevlyar/go-daemon"
 )
 
@@ -51,17 +52,18 @@ var (
 	owner         = "openatx"
 	repo          = "atx-agent"
 	listenPort    int
-	daemonLogPath = "/sdcard/atx-agent.log"
+	daemonLogPath = "/sdcard/atx-agent.daemon.log"
+
+	rotationPublisher   = broadcast.NewBroadcaster(1)
+	minicapSocketPath   = "@minicap"
+	minitouchSocketPath = "@minitouch"
+	log                 = logger.Default
 )
 
 const (
 	apkVersionCode = 4
 	apkVersionName = "1.0.4"
 )
-
-func init() {
-	syslog.SetFlags(syslog.Lshortfile | syslog.LstdFlags)
-}
 
 // singleFight for http request
 // - minicap
@@ -188,10 +190,18 @@ var (
 )
 
 func updateMinicapRotation(rotation int) {
+	running := service.Running("minicap")
+	if running {
+		service.Stop("minicap")
+		killProcessByName("minicap") // kill not controlled minicap
+	}
 	devInfo := getDeviceInfo()
 	width, height := devInfo.Display.Width, devInfo.Display.Height
 	service.UpdateArgs("minicap", "/data/local/tmp/minicap", "-S", "-P",
 		fmt.Sprintf("%dx%d@%dx%d/%d", width, height, displayMaxWidthHeight, displayMaxWidthHeight, rotation))
+	if running {
+		service.Start("minicap")
+	}
 }
 
 func checkUiautomatorInstalled() (ok bool) {
@@ -279,7 +289,7 @@ var (
 	// target, _ := url.Parse("http://127.0.0.1:9008")
 	// uiautomatorProxy := httputil.NewSingleHostReverseProxy(target)
 
-	uiautomatorTimer = NewSafeTimer(time.Minute * 3)
+	uiautomatorTimer = NewSafeTimer(time.Hour * 3)
 
 	uiautomatorProxy = &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
@@ -328,7 +338,7 @@ func (r *errorBinaryReader) ReadInto(datas ...interface{}) error {
 }
 
 // read from @minicap and send jpeg raw data to channel
-func translateMinicap(conn net.Conn, jpgC chan []byte, quitC chan bool) error {
+func translateMinicap(conn net.Conn, jpgC chan []byte, ctx context.Context) error {
 	var pid, rw, rh, vw, vh uint32
 	var version, unused, orientation, quirkFlag uint8
 	rd := bufio.NewReader(conn)
@@ -355,7 +365,7 @@ func translateMinicap(conn net.Conn, jpgC chan []byte, quitC chan bool) error {
 		}
 		select {
 		case jpgC <- buf.Bytes(): // Maybe should use buffer instead
-		case <-quitC:
+		case <-ctx.Done():
 			return nil
 		default:
 			// TODO(ssx): image should not wait or it will stuck here
@@ -367,11 +377,16 @@ func translateMinicap(conn net.Conn, jpgC chan []byte, quitC chan bool) error {
 func runDaemon() (cntxt *daemon.Context) {
 	cntxt = &daemon.Context{ // remove pid to prevent resource busy
 		PidFilePerm: 0644,
-		LogFileName: daemonLogPath,
 		LogFilePerm: 0640,
 		WorkDir:     "./",
 		Umask:       022,
 	}
+	// log might be no auth
+	if f, err := os.OpenFile(daemonLogPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644); err == nil { // |os.O_APPEND
+		f.Close()
+		cntxt.LogFileName = daemonLogPath
+	}
+
 	child, err := cntxt.Reborn()
 	if err != nil {
 		log.Fatal("Unale to run: ", err)
@@ -380,6 +395,10 @@ func runDaemon() (cntxt *daemon.Context) {
 		return nil // return nil indicate program run in parent
 	}
 	return cntxt
+}
+
+func setupLogrotate() {
+	logger.SetOutputFile("/sdcard/atx-agent.log")
 }
 
 func stopSelf() {
@@ -400,6 +419,8 @@ func stopSelf() {
 }
 
 func init() {
+	syslog.SetFlags(syslog.Lshortfile | syslog.LstdFlags)
+
 	// Set timezone.
 	//
 	// Note that Android zoneinfo is stored in /system/usr/share/zoneinfo,
@@ -424,6 +445,48 @@ func init() {
 			}
 		}
 		time.Local = time.FixedZone(tz, offset*3600)
+	}
+}
+
+// lazyInit will be called in func:main
+func lazyInit() {
+	// watch rotation and send to rotatinPublisher
+	go _watchRotation()
+	if !isMinicapSupported() {
+		minicapSocketPath = "@minicapagent"
+	}
+
+	if !fileExists("/data/local/tmp/minitouch") {
+		minitouchSocketPath = "@minitouchagent"
+	} else if sdk, _ := strconv.Atoi(getCachedProperty("ro.build.version.sdk")); sdk > 28 { // Android Q..
+		minitouchSocketPath = "@minitouchagent"
+	}
+}
+
+func _watchRotation() {
+	for {
+		conn, err := net.Dial("unix", "@rotationagent")
+		if err != nil {
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		func() {
+			defer conn.Close()
+			scanner := bufio.NewScanner(conn)
+			for scanner.Scan() {
+				rotation, err := strconv.Atoi(scanner.Text())
+				if err != nil {
+					continue
+				}
+				deviceRotation = rotation
+				if minicapSocketPath == "@minicap" {
+					updateMinicapRotation(deviceRotation)
+				}
+				rotationPublisher.Submit(rotation)
+				log.Println("Rotation -->", rotation)
+			}
+		}()
+		time.Sleep(1 * time.Second)
 	}
 }
 
@@ -510,15 +573,6 @@ func main() {
 		}
 	}
 
-	// if *fRequirements {
-	// 	log.Println("check dependencies")
-	// 	if err := installRequirements(); err != nil {
-	// 		// panic(err)
-	// 		log.Println("requirements not ready:", err)
-	// 		return
-	// 	}
-	// }
-
 	serverURL := *fServerURL
 	if serverURL != "" {
 		if !regexp.MustCompile(`https?://`).MatchString(serverURL) {
@@ -545,11 +599,13 @@ func main() {
 			return
 		}
 		defer cntxt.Release()
-		log.Print("- - - - - - - - - - - - - - -")
-		log.Print("daemon started")
+		log.Println("- - - - - - - - - - - - - - -")
+		log.Println("daemon started")
+		setupLogrotate()
 	}
 
-	fmt.Printf("atx-agent version %s\n", version)
+	log.Printf("atx-agent version %s\n", version)
+	lazyInit()
 
 	// show ip
 	outIp, err := getOutboundIP()
@@ -574,28 +630,29 @@ func main() {
 			fmt.Sprintf("%dx%d@%dx%d/0", width, height, displayMaxWidthHeight, displayMaxWidthHeight)},
 	})
 
-	service.Add("minitouch", cmdctrl.CommandInfo{
+	service.Add("apkagent", cmdctrl.CommandInfo{
+		MaxRetries: 2,
+		Shell:      true,
+		OnStart: func() error {
+			log.Println("killProcessByName apk-agent.cli")
+			killProcessByName("apkagent.cli")
+			return nil
+		},
 		ArgsFunc: func() ([]string, error) {
-			sdk, err := strconv.Atoi(getCachedProperty("ro.build.version.sdk"))
-			if err != nil || sdk <= 28 { // Android P(sdk:28)
-				minitouchSocketPath = "@minitouch"
-				return []string{"/data/local/tmp/minitouch"}, nil
-			}
-			minitouchSocketPath = "@minitouchagent"
-			pmPathOutput, err := Command{
-				Args:  []string{"pm", "path", "com.github.uiautomator"},
-				Shell: true,
-			}.CombinedOutputString()
+			packagePath, err := getPackagePath("com.github.uiautomator")
 			if err != nil {
 				return nil, err
 			}
-			if !strings.HasPrefix(pmPathOutput, "package:") {
-				return nil, errors.New("invalid pm path output: " + pmPathOutput)
-			}
-			packagePath := strings.TrimSpace(pmPathOutput[len("package:"):])
-			return []string{"CLASSPATH=" + packagePath, "exec", "app_process", "/system/bin", "com.github.uiautomator.MinitouchAgent"}, nil
+			return []string{"CLASSPATH=" + packagePath, "exec", "app_process", "/system/bin", "com.github.uiautomator.Console"}, nil
 		},
-		Shell: true,
+	})
+
+	service.Start("apkagent")
+
+	service.Add("minitouch", cmdctrl.CommandInfo{
+		MaxRetries: 2,
+		Args:       []string{"/data/local/tmp/minitouch"},
+		Shell:      true,
 	})
 
 	// uiautomator 1.0

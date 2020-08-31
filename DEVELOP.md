@@ -1,6 +1,7 @@
 # Develop doc
 需要Go版本 >= 1.11, 这个版本之后可以不用设置GOPATH变量了。
 
+
 ## 安装Go环境
 Mac上安装Go
 
@@ -9,6 +10,8 @@ brew install go
 ```
 
 ## 编译方法
+编译参考: https://github.com/golang/go/wiki/GoArm
+
 ```bash
 # 下载代码
 git clone https://github.com/openatx/atx-agent
@@ -27,3 +30,6 @@ go generate
 # build for android binary
 GOOS=linux GOARCH=arm go build -tags vfs
 ```
+
+## 七牛
+感谢ken提供的Qiniu镜像服务。默认qiniu服务器会去github上拉镜像，但由于近期(2020-03-20)镜像服务越来越不稳定，所以目前改为在travis服务器上直接推送到七牛CDN

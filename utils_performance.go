@@ -2,7 +2,6 @@ package main
 
 import (
 	"github.com/sirupsen/logrus"
-	"log"
 	"net/http"
 	"regexp"
 	"strconv"

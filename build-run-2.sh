@@ -12,7 +12,7 @@ DEST="/data/local/tmp/realdevice-agent"
 echo "Build binary for arm ..."
 #GOOS=linux GOARCH=arm go build
 
-go generate
+#go generate
 GOOS=linux GOARCH=arm go build -tags vfs
 
 $ADB push atx-agent $DEST

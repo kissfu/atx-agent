@@ -9,7 +9,6 @@ import (
 	"image"
 	"io"
 	"io/ioutil"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -656,4 +655,46 @@ func listPackages() (pkgs []PackageInfo, err error) {
 		pkgs = append(pkgs, pkgInfo)
 	}
 	return
+}
+
+func killProcessByName(processName string) bool {
+	procs, err := procfs.AllProcs()
+	if err != nil {
+		return false
+	}
+
+	killed := false
+	for _, p := range procs {
+		cmdline, _ := p.CmdLine()
+		var name string
+		if len(cmdline) >= 1 {
+			name = filepath.Base(cmdline[0])
+		} else {
+			name, _ = p.Comm()
+		}
+
+		if name == processName {
+			process, err := os.FindProcess(p.PID)
+			if err == nil {
+				process.Kill()
+				killed = true
+			}
+		}
+	}
+	return killed
+}
+
+func getPackagePath(packageName string) (string, error) {
+	pmPathOutput, err := Command{
+		Args:  []string{"pm", "path", "com.github.uiautomator"},
+		Shell: true,
+	}.CombinedOutputString()
+	if err != nil {
+		return "", err
+	}
+	if !strings.HasPrefix(pmPathOutput, "package:") {
+		return "", errors.New("invalid pm path output: " + pmPathOutput)
+	}
+	packagePath := strings.TrimSpace(pmPathOutput[len("package:"):])
+	return packagePath, nil
 }

@@ -7,11 +7,7 @@ import (
 	"io"
 	"io/ioutil"
 	"net"
-
-	"github.com/qiniu/log"
 )
-
-var minitouchSocketPath = "@minitouch"
 
 type toucher struct {
 	width, height int

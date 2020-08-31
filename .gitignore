@@ -4,6 +4,8 @@
 *.so
 *.dylib
 
+.idea/
+
 # Test binary, build with `go test -c`
 *.test
 
@@ -21,4 +23,5 @@ testcmd/
 *.exe.old
 *.apk
 go.sum
-.idea/
+.DS_Store
+dist/
